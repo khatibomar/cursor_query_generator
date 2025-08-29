@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cursor Pagination Query Generator</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; background: #fafafa; }
+    h2 { margin-top: 1.5rem; }
+    .grid { display: grid; gap: 0.5rem; }
+    .row { display: flex; gap: 0.5rem; }
+    input, select, button, textarea {
+      padding: 0.5rem;
+      font-size: 0.9rem;
+    }
+    textarea {
+      width: 100%;
+      height: 12rem;
+      resize: none;
+      font-family: monospace;
+      white-space: pre;
+    }
+    .output { background: #fff; border: 1px solid #ddd; padding: 0.5rem; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Cursor Pagination SQL Generator</h1>
+
+  <label>Table Name:
+    <input id="tableName" placeholder="posts" />
+  </label>
+
+  <h2>Order Columns</h2>
+  <div id="columns"></div>
+  <button onclick="addColumn()">+ Add Column</button>
+
+  <h2>Generated Queries</h2>
+  <div class="grid">
+    <div>
+      <h3>First Page</h3>
+      <textarea id="firstPage" readonly></textarea>
+    </div>
+    <div>
+      <h3>After (Next Page)</h3>
+      <textarea id="afterPage" readonly></textarea>
+    </div>
+    <div>
+      <h3>Before (Previous Page)</h3>
+      <textarea id="beforePage" readonly></textarea>
+    </div>
+  </div>
+
+  <script>
+    function addColumn() {
+      const div = document.createElement('div');
+      div.className = 'row';
+      div.innerHTML = `
+        <input placeholder="column_name" class="colName" />
+        <select class="colDir">
+          <option value="ASC">ASC</option>
+          <option value="DESC">DESC</option>
+        </select>
+        <button onclick="this.parentElement.remove(); generateQueries();">x</button>
+      `;
+      document.getElementById('columns').appendChild(div);
+      div.querySelectorAll('input,select').forEach(el => el.addEventListener('input', generateQueries));
+    }
+
+    function generateQueries() {
+      const table = document.getElementById('tableName').value || 'my_table';
+      const colEls = document.querySelectorAll('#columns .row');
+      const cols = Array.from(colEls).map(r => ({
+        name: r.querySelector('.colName').value.trim(),
+        dir: r.querySelector('.colDir').value
+      })).filter(c => c.name);
+
+      if (cols.length === 0) return;
+
+      const orderBy = cols.map(c => `${c.name} ${c.dir}`).join(', ');
+      const orderByReversed = cols.map(c => `${c.name} ${c.dir === 'ASC' ? 'DESC' : 'ASC'}`).join(', ');
+
+      const firstQuery = `SELECT *\nFROM ${table}\nORDER BY ${orderBy}\nLIMIT $1;`;
+
+      const afterConds = [];
+      cols.forEach((c, i) => {
+        const eqs = cols.slice(0, i).map(p => `${p.name} = $${cols.indexOf(p)+1}`).join(' AND ');
+        const op = (c.dir === 'ASC') ? '>' : '<';
+        const cond = `${c.name} ${op} $${i+1}`;
+        afterConds.push((eqs ? `(${eqs} AND ${cond})` : `(${cond})`));
+      });
+      const afterQuery = `SELECT *\nFROM ${table}\nWHERE ${afterConds.join("\n   OR ")}\nORDER BY ${orderBy}\nLIMIT $${cols.length+1};`;
+
+      const beforeConds = [];
+      cols.forEach((c, i) => {
+        const eqs = cols.slice(0, i).map(p => `${p.name} = $${cols.indexOf(p)+1}`).join(' AND ');
+        const op = (c.dir === 'ASC') ? '<' : '>';
+        const cond = `${c.name} ${op} $${i+1}`;
+        beforeConds.push((eqs ? `(${eqs} AND ${cond})` : `(${cond})`));
+      });
+      const beforeQuery = `SELECT *\nFROM ${table}\nWHERE ${beforeConds.join("\n   OR ")}\nORDER BY ${orderByReversed}\nLIMIT $${cols.length+1};`;
+
+      document.getElementById('firstPage').value = firstQuery;
+      document.getElementById('afterPage').value = afterQuery;
+      document.getElementById('beforePage').value = beforeQuery;
+    }
+
+    document.getElementById('tableName').addEventListener('input', generateQueries);
+    addColumn(); addColumn();
+  </script>
+</body>
+</html>
