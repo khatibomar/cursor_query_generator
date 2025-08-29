@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cursor Pagination SQL Generator</title>
-  <style>
+    <style>
     html { max-width: 80%; margin: auto; }
     body { font-family: sans-serif; margin: 2rem; background: #fafafa; }
     h2 { margin-top: 1.5rem; }
@@ -25,61 +26,105 @@
 </head>
 <body>
   <h1>Cursor Pagination SQL Generator</h1>
+  <p>Generate efficient cursor-based pagination queries</p>
 
-  <label>Table Name:
-    <input id="tableName" placeholder="post" />
-  </label>
+  <h2>Table Configuration</h2>
+  <div>
+    <label for="tableName">Table Name:</label>
+    <input type="text" id="tableName" placeholder="e.g., posts" value="posts">
+  </div>
 
   <h2>Order Columns</h2>
   <div id="columns"></div>
-  <button onclick="addColumn()">+ Add Column</button>
+  <button onclick="addColumn()">Add Column</button>
 
-  <h2>Generated Queries</h2>
-  <div class="grid">
-    <div>
-      <h3>First Page</h3>
-      <textarea autocomplete="off" id="firstPage" readonly></textarea>
-    </div>
-    <div>
-      <h3>After (Next Page)</h3>
-      <textarea autocomplete="off" id="afterPage" readonly></textarea>
-    </div>
-    <div>
-      <h3>Before (Previous Page)</h3>
-      <textarea autocomplete="off" id="beforePage" readonly></textarea>
-    </div>
+  <h2>Generated SQL Queries</h2>
+  <div>
+    <button onclick="showTab('first')">First Page</button>
+    <button onclick="showTab('after')">After (Next)</button>
+    <button onclick="showTab('before')">Before (Previous)</button>
   </div>
 
-  <h2>Generated Go Code Snippet</h2>
-  <div class="output">
-    <textarea autocomplete="off" readonly id="goCode"></textarea>
+  <div id="first-tab" class="tab-content">
+    <h3>First Page Query</h3>
+    <textarea id="firstPage" readonly rows="6" cols="80"></textarea>
+    <button onclick="copyToClipboard('firstPage')">Copy</button>
   </div>
+
+  <div id="after-tab" class="tab-content" style="display:none">
+    <h3>After (Next Page) Query</h3>
+    <textarea id="afterPage" readonly rows="6" cols="80"></textarea>
+    <button onclick="copyToClipboard('afterPage')">Copy</button>
+  </div>
+
+  <div id="before-tab" class="tab-content" style="display:none">
+    <h3>Before (Previous Page) Query</h3>
+    <textarea id="beforePage" readonly rows="6" cols="80"></textarea>
+    <button onclick="copyToClipboard('beforePage')">Copy</button>
+  </div>
+
+  <h2>Generated Go Code</h2>
+  <textarea id="goCode" readonly rows="20" cols="80"></textarea>
+  <button onclick="copyToClipboard('goCode')">Copy</button>
+
+  <div id="toast" style="display:none; position:fixed; bottom:20px; right:20px; padding:10px; background:#28a745; color:white;">Copied to clipboard!</div>
 
   <script>
-    function addColumn() {
+    function snakeToPascal(str) {
+      return str.split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join('');
+    }
+
+    function init() {
+      addColumn('id', 'ASC');
+      addColumn('created_at', 'DESC');
+
+      document.getElementById('tableName').addEventListener('input', generateQueries);
+      generateQueries();
+    }
+
+    function addColumn(name = '', direction = 'ASC') {
       const div = document.createElement('div');
-      div.className = 'row';
       div.innerHTML = `
-        <input placeholder="column_name" class="colName" />
+        <input type="text" placeholder="Column name" class="colName" value="${name}">
         <select class="colDir">
-          <option value="ASC">ASC</option>
-          <option value="DESC">DESC</option>
+          <option value="ASC" ${direction === 'ASC' ? 'selected' : ''}>ASC</option>
+          <option value="DESC" ${direction === 'DESC' ? 'selected' : ''}>DESC</option>
         </select>
-        <button onclick="this.parentElement.remove(); generateQueries();">x</button>
+        <button onclick="this.parentElement.remove(); generateQueries();">Remove</button>
       `;
       document.getElementById('columns').appendChild(div);
-      div.querySelectorAll('input,select').forEach(el => el.addEventListener('input', generateQueries));
+
+      div.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('input', generateQueries);
+      });
+
+      generateQueries();
+    }
+
+    function showTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.style.display = 'none';
+      });
+      document.getElementById(`${tabName}-tab`).style.display = 'block';
     }
 
     function generateQueries() {
-      const table = document.getElementById('tableName').value || 'my_table';
-      const colEls = document.querySelectorAll('#columns .row');
-      const cols = Array.from(colEls).map(r => ({
-        name: r.querySelector('.colName').value.trim(),
-        dir: r.querySelector('.colDir').value
+      const table = document.getElementById('tableName').value || 'posts';
+      const colEls = document.querySelectorAll('#columns .colName');
+      const cols = Array.from(colEls).map((col, i) => ({
+        name: col.value.trim(),
+        dir: document.querySelectorAll('#columns .colDir')[i].value
       })).filter(c => c.name);
 
-      if (cols.length === 0) return;
+      if (cols.length === 0) {
+        document.getElementById('firstPage').value = '-- Add at least one order column';
+        document.getElementById('afterPage').value = '-- Add at least one order column';
+        document.getElementById('beforePage').value = '-- Add at least one order column';
+        document.getElementById('goCode').value = '// Add at least one order column to generate Go code';
+        return;
+      }
 
       const orderBy = cols.map(c => `${c.name} ${c.dir}`).join(', ');
       const orderByReversed = cols.map(c => `${c.name} ${c.dir === 'ASC' ? 'DESC' : 'ASC'}`).join(', ');
@@ -87,30 +132,33 @@
       const firstQuery = `SELECT *\nFROM ${table}\nORDER BY ${orderBy}\nLIMIT $1;`;
 
       const afterConds = [];
-      cols.forEach((c, i) => {
-        const eqs = cols.slice(0, i).map(p => `${p.name} = $${i+1}`).join(' AND ');
-        const op = (c.dir === 'ASC') ? '>' : '<';
-        const cond = `${c.name} ${op} $${i+1}`;
-        afterConds.push(eqs ? `(${eqs} AND ${cond})` : `(${cond})`);
-      });
-      const afterQuery = `SELECT *\nFROM ${table}\nWHERE ${afterConds.join("\n   OR ")}\nORDER BY ${orderBy}\nLIMIT $${cols.length+1};`;
-
       const beforeConds = [];
+
       cols.forEach((c, i) => {
-        const eqs = cols.slice(0, i).map(p => `${p.name} = $${i+1}`).join(' AND ');
-        const op = (c.dir === 'ASC') ? '<' : '>';
-        const cond = `${c.name} ${op} $${i+1}`;
-        beforeConds.push(eqs ? `(${eqs} AND ${cond})` : `(${cond})`);
+        const prevColsEqAfter = cols.slice(0, i).map((p, j) => `${p.name} = $${j+1}`).join(' AND ');
+        const opAfter = (c.dir === 'ASC') ? '>' : '<';
+        const condAfter = `${c.name} ${opAfter} $${i+1}`;
+        afterConds.push(prevColsEqAfter ? `(${prevColsEqAfter} AND ${condAfter})` : `(${condAfter})`);
+
+        const prevColsEqBefore = cols.slice(0, i).map((p, j) => `${p.name} = $${j+1}`).join(' AND ');
+        const opBefore = (c.dir === 'ASC') ? '<' : '>';
+        const condBefore = `${c.name} ${opBefore} $${i+1}`;
+        beforeConds.push(prevColsEqBefore ? `(${prevColsEqBefore} AND ${condBefore})` : `(${condBefore})`);
       });
+
+      const afterQuery = `SELECT *\nFROM ${table}\nWHERE ${afterConds.join("\n   OR ")}\nORDER BY ${orderBy}\nLIMIT $${cols.length+1};`;
       const beforeQuery = `SELECT *\nFROM ${table}\nWHERE ${beforeConds.join("\n   OR ")}\nORDER BY ${orderByReversed}\nLIMIT $${cols.length+1};`;
 
       document.getElementById('firstPage').value = firstQuery;
       document.getElementById('afterPage').value = afterQuery;
       document.getElementById('beforePage').value = beforeQuery;
 
-      // Generate Go code dynamically using pgx/v5 and struct same as table name
-      const structFields = cols.map(c => `    ${c.name.charAt(0).toUpperCase() + c.name.slice(1)} string`).join('\n');
-      const cursorAssignments = cols.map(c => `        "${c.name}": last.${c.name.charAt(0).toUpperCase() + c.name.slice(1)}`).join(',\n');
+      const structFields = cols.map(c => `    ${snakeToPascal(c.name)} string`).join('\n');
+      const cursorAssignments = cols.map(c => `        "${c.name}": last.${snakeToPascal(c.name)}`).join(',\n');
+
+      const cursorValues = cols.map(c => `cursor.${snakeToPascal(c.name)}`);
+      const afterArgs = [...cursorValues, 'limit'].join(', ');
+      const beforeArgs = [...cursorValues, 'limit'].join(', ');
 
       const goCode = `package main
 
@@ -118,22 +166,19 @@ import (
     "context"
     "encoding/base64"
     "encoding/json"
-    "fmt"
     "log"
-
     "github.com/jackc/pgx/v5"
 )
 
-type ${table.charAt(0).toUpperCase() + table.slice(1)} struct {
+type ${snakeToPascal(table)} struct {
 ${structFields}
-    // rest of fields here...
 }
 
 type Cursor struct {
 ${structFields}
 }
 
-func Get${table.charAt(0).toUpperCase() + table.slice(1)}s(ctx context.Context, conn *pgx.Conn, cursor *Cursor, dir string, limit int) ([]${table.charAt(0).toUpperCase() + table.slice(1)}, string, string, error) {
+func Get${snakeToPascal(table)}s(ctx context.Context, conn *pgx.Conn, cursor *Cursor, dir string, limit int) ([]${snakeToPascal(table)}, string, string, error) {
     firstSQL := \`${firstQuery}\`
     afterSQL := \`${afterQuery}\`
     beforeSQL := \`${beforeQuery}\`
@@ -143,9 +188,9 @@ func Get${table.charAt(0).toUpperCase() + table.slice(1)}s(ctx context.Context, 
 
     switch dir {
     case "after":
-        rows, err = conn.Query(ctx, afterSQL /* cursor values */)
+        rows, err = conn.Query(ctx, afterSQL, ${afterArgs})
     case "before":
-        rows, err = conn.Query(ctx, beforeSQL /* cursor values */)
+        rows, err = conn.Query(ctx, beforeSQL, ${beforeArgs})
     default:
         rows, err = conn.Query(ctx, firstSQL, limit)
     }
@@ -155,10 +200,10 @@ func Get${table.charAt(0).toUpperCase() + table.slice(1)}s(ctx context.Context, 
     }
     defer rows.Close()
 
-    var result []${table.charAt(0).toUpperCase() + table.slice(1)}
+    var result []${snakeToPascal(table)}
     for rows.Next() {
-        var r ${table.charAt(0).toUpperCase() + table.slice(1)}
-        // rows.Scan(...) depending on your fields
+        var r ${snakeToPascal(table)}
+        // Implement rows.Scan() based on your table structure
         result = append(result, r)
     }
 
@@ -179,7 +224,7 @@ ${cursorAssignments}
 
         first := result[0]
         c2 := Cursor{
-${cursorAssignments}
+${cursorAssignments.replace(/last\./g, 'first.')}
         }
         b2, _ := json.Marshal(c2)
         beforeCursor = base64.StdEncoding.EncodeToString(b2)
@@ -191,8 +236,17 @@ ${cursorAssignments}
       document.getElementById('goCode').value = goCode;
     }
 
-    document.getElementById('tableName').addEventListener('input', generateQueries);
-    addColumn(); addColumn();
+    function copyToClipboard(elementId) {
+      const textarea = document.getElementById(elementId);
+      textarea.select();
+      document.execCommand('copy');
+
+      const toast = document.getElementById('toast');
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 3000);
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
 </html>
