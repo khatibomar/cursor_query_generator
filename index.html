@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Cursor Pagination Query Generator</title>
+  <title>Cursor Pagination SQL Generator</title>
   <style>
+    html { max-width: 80%; margin: auto; }
     body { font-family: sans-serif; margin: 2rem; background: #fafafa; }
     h2 { margin-top: 1.5rem; }
     .grid { display: grid; gap: 0.5rem; }
@@ -26,7 +27,7 @@
   <h1>Cursor Pagination SQL Generator</h1>
 
   <label>Table Name:
-    <input id="tableName" placeholder="posts" />
+    <input id="tableName" placeholder="post" />
   </label>
 
   <h2>Order Columns</h2>
@@ -37,16 +38,21 @@
   <div class="grid">
     <div>
       <h3>First Page</h3>
-      <textarea id="firstPage" readonly></textarea>
+      <textarea autocomplete="off" id="firstPage" readonly></textarea>
     </div>
     <div>
       <h3>After (Next Page)</h3>
-      <textarea id="afterPage" readonly></textarea>
+      <textarea autocomplete="off" id="afterPage" readonly></textarea>
     </div>
     <div>
       <h3>Before (Previous Page)</h3>
-      <textarea id="beforePage" readonly></textarea>
+      <textarea autocomplete="off" id="beforePage" readonly></textarea>
     </div>
+  </div>
+
+  <h2>Generated Go Code Snippet</h2>
+  <div class="output">
+    <textarea autocomplete="off" readonly id="goCode"></textarea>
   </div>
 
   <script>
@@ -82,25 +88,107 @@
 
       const afterConds = [];
       cols.forEach((c, i) => {
-        const eqs = cols.slice(0, i).map(p => `${p.name} = $${cols.indexOf(p)+1}`).join(' AND ');
+        const eqs = cols.slice(0, i).map(p => `${p.name} = $${i+1}`).join(' AND ');
         const op = (c.dir === 'ASC') ? '>' : '<';
         const cond = `${c.name} ${op} $${i+1}`;
-        afterConds.push((eqs ? `(${eqs} AND ${cond})` : `(${cond})`));
+        afterConds.push(eqs ? `(${eqs} AND ${cond})` : `(${cond})`);
       });
       const afterQuery = `SELECT *\nFROM ${table}\nWHERE ${afterConds.join("\n   OR ")}\nORDER BY ${orderBy}\nLIMIT $${cols.length+1};`;
 
       const beforeConds = [];
       cols.forEach((c, i) => {
-        const eqs = cols.slice(0, i).map(p => `${p.name} = $${cols.indexOf(p)+1}`).join(' AND ');
+        const eqs = cols.slice(0, i).map(p => `${p.name} = $${i+1}`).join(' AND ');
         const op = (c.dir === 'ASC') ? '<' : '>';
         const cond = `${c.name} ${op} $${i+1}`;
-        beforeConds.push((eqs ? `(${eqs} AND ${cond})` : `(${cond})`));
+        beforeConds.push(eqs ? `(${eqs} AND ${cond})` : `(${cond})`);
       });
       const beforeQuery = `SELECT *\nFROM ${table}\nWHERE ${beforeConds.join("\n   OR ")}\nORDER BY ${orderByReversed}\nLIMIT $${cols.length+1};`;
 
       document.getElementById('firstPage').value = firstQuery;
       document.getElementById('afterPage').value = afterQuery;
       document.getElementById('beforePage').value = beforeQuery;
+
+      // Generate Go code dynamically using pgx/v5 and struct same as table name
+      const structFields = cols.map(c => `    ${c.name.charAt(0).toUpperCase() + c.name.slice(1)} string`).join('\n');
+      const cursorAssignments = cols.map(c => `        "${c.name}": last.${c.name.charAt(0).toUpperCase() + c.name.slice(1)}`).join(',\n');
+
+      const goCode = `package main
+
+import (
+    "context"
+    "encoding/base64"
+    "encoding/json"
+    "fmt"
+    "log"
+
+    "github.com/jackc/pgx/v5"
+)
+
+type ${table.charAt(0).toUpperCase() + table.slice(1)} struct {
+${structFields}
+    // rest of fields here...
+}
+
+type Cursor struct {
+${structFields}
+}
+
+func Get${table.charAt(0).toUpperCase() + table.slice(1)}s(ctx context.Context, conn *pgx.Conn, cursor *Cursor, dir string, limit int) ([]${table.charAt(0).toUpperCase() + table.slice(1)}, string, string, error) {
+    firstSQL := \`${firstQuery}\`
+    afterSQL := \`${afterQuery}\`
+    beforeSQL := \`${beforeQuery}\`
+
+    var rows pgx.Rows
+    var err error
+
+    switch dir {
+    case "after":
+        rows, err = conn.Query(ctx, afterSQL /* cursor values */)
+    case "before":
+        rows, err = conn.Query(ctx, beforeSQL /* cursor values */)
+    default:
+        rows, err = conn.Query(ctx, firstSQL, limit)
+    }
+
+    if err != nil {
+        return nil, "", "", err
+    }
+    defer rows.Close()
+
+    var result []${table.charAt(0).toUpperCase() + table.slice(1)}
+    for rows.Next() {
+        var r ${table.charAt(0).toUpperCase() + table.slice(1)}
+        // rows.Scan(...) depending on your fields
+        result = append(result, r)
+    }
+
+    if dir == "before" {
+        for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+            result[i], result[j] = result[j], result[i]
+        }
+    }
+
+    var afterCursor, beforeCursor string
+    if len(result) > 0 {
+        last := result[len(result)-1]
+        c := Cursor{
+${cursorAssignments}
+        }
+        b, _ := json.Marshal(c)
+        afterCursor = base64.StdEncoding.EncodeToString(b)
+
+        first := result[0]
+        c2 := Cursor{
+${cursorAssignments}
+        }
+        b2, _ := json.Marshal(c2)
+        beforeCursor = base64.StdEncoding.EncodeToString(b2)
+    }
+
+    return result, afterCursor, beforeCursor, nil
+}`;
+
+      document.getElementById('goCode').value = goCode;
     }
 
     document.getElementById('tableName').addEventListener('input', generateQueries);
